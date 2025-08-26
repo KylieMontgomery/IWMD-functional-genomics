@@ -1,0 +1,341 @@
+---
+title: "IWMD gene panels"
+author: "Kylie Montgomery"
+date: 01/09/2024
+output:
+  html_document:
+    code_folding: show
+    df_print: paged
+    highlight: kate
+    theme: paper
+    toc: yes
+    toc_depth: 2
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+# Load libraries
+library(data.table)
+library(ggpubr)
+library(readxl)
+library(stringr)
+library(tidyverse)
+library(UpSetR)
+library(forcats)
+
+knitr::opts_chunk$set(echo = T, warning = F, message= F)
+```
+
+# R Markdown
+
+## PanelApp and HPO-associated gene sets
+1. Adult onset leukodystrophy
+2. Childhood onset leukodystrophy
+3. HPO derived IWMD gene list
+
+Only retrieve “green” genes and rid of CNVs including ISCA-37390-Loss; ISCA-37392-Gain; ISCA-37392-Loss which are regions, not genes (i.e. no gene symbol).
+
+```{r}
+#Import gene lists, PanelApp and HPO derived
+
+adult_onset_leukodystrophy <- read_delim("/home/MinaRyten/Kylie/Functional_genomic_annotation_IWMD/raw_data/Adult onset leukodystrophy.tsv", 
+    delim = "\t", escape_double = FALSE, 
+    trim_ws = TRUE)
+
+adult_IWMD_green_panelapp <- adult_onset_leukodystrophy %>%
+  dplyr::mutate(Sources = `Sources(; separated)`) %>%
+  dplyr::select(-`Sources(; separated)`) %>%
+  dplyr::filter(stringr::str_detect(Sources, "Expert Review Green")) %>%
+  dplyr::filter(`Gene Symbol` != "") %>%
+  dplyr::rename(
+    symbol = `Gene Symbol`,
+    ensembl_gene_id = `EnsemblId(GRch38)`
+  )
+
+childhood_onset_leukodystrophy <- read_delim("/home/MinaRyten/Kylie/Functional_genomic_annotation_IWMD/raw_data/Childhood onset leukodystrophy.tsv", 
+    delim = "\t", escape_double = FALSE, 
+    trim_ws = TRUE)
+
+child_IWMD_green_panelapp <- childhood_onset_leukodystrophy %>%
+  dplyr::mutate(Sources = `Sources(; separated)`) %>%
+  dplyr::select(-`Sources(; separated)`) %>%
+  dplyr::filter(stringr::str_detect(Sources, "Expert Review Green")) %>%
+  dplyr::filter(`Gene Symbol` != "") %>%
+  dplyr::rename(
+    symbol = `Gene Symbol`,
+    ensembl_gene_id = `EnsemblId(GRch38)`
+  )
+
+HPO_genes_manual <- read_csv("/home/MinaRyten/Kylie/Functional_genomic_annotation_IWMD/raw_data/final_HPO_gene_list.csv") %>% 
+  dplyr::rename('Model_Of_Inheritance' = 'text')
+
+#Check for missing values
+HPO_genes_manual %>% is.na() %>% sum()
+
+#Update missing values
+#IFT56
+HPO_genes_manual[682, 3] = "ENSG00000105948"
+HPO_genes_manual[682, 1] = 79989
+#AFG2A
+HPO_genes_manual[680, 3] = "ENSG00000145375"
+HPO_genes_manual[680, 1] = 166378
+#AFG2B
+HPO_genes_manual[681, 3] = "ENSG00000171763"
+HPO_genes_manual[681, 1] = 79029
+#CLTCL1
+HPO_genes_manual[298, 4] = "Autosomal recessive"
+#STXBP2
+HPO_genes_manual[264, 4] = "Autosomal recessive"
+#ADAMTSL1
+HPO_genes_manual[616, 4] = "Autosomal dominant"
+#PIK3CA
+HPO_genes_manual[210, 4] = "Autosomal dominant"
+
+HPO_genes_manual[116, 4] = "Autosomal dominant"
+
+HPO_genes_manual %>% is.na() %>% sum()
+
+adult_IWMD_green_panelapp %>% as_tibble()
+
+child_IWMD_green_panelapp %>% as_tibble()
+
+HPO_genes_manual %>% as_tibble()
+```
+
+# Overlap of genes between three groups
+
+```{r}
+list_adult <- unique(as.list(adult_IWMD_green_panelapp$ensembl_gene_id))
+list_child <- unique(as.list(child_IWMD_green_panelapp$ensembl_gene_id))
+list_HPO <- unique(as.list(HPO_genes_manual$ensembl_gene_id))
+named_list <- setNames(list(list_adult, list_child, list_HPO),
+                       c("Adult onset", "Childhood onset", "HPO_genes"))
+
+plotObject_panel_overlap <- upset(fromList(named_list), sets = names(named_list), keep.order = TRUE, nintersects = 8, 
+                                  order.by = "freq", main.bar.color = "midnightblue", mainbar.y.label = "Number of genes shared")
+
+print(plotObject_panel_overlap)
+```
+
+# Characteristics of genes as annotated by Genomics England
+
+```{r}
+# Amalgamate all three sets into a combined set for comparison
+
+adult_IWMD_green_panelapp <- adult_IWMD_green_panelapp %>% as.data.frame() %>% 
+  dplyr::select(-(`Position Chromosome`))
+
+HPO_gene_list <- HPO_genes_manual %>% as.data.frame() %>% 
+  dplyr::select(symbol, ensembl_gene_id, Model_Of_Inheritance) 
+
+HPO_gene_list$Level4 <- "Childhood-enriched IWMD genes"
+HPO_gene_list$`Entity type` <- "gene"
+
+combined_gene_set_panelapp <- dplyr::bind_rows(adult_IWMD_green_panelapp, HPO_gene_list)
+
+combined_gene_set_panelapp_modified <- combined_gene_set_panelapp %>% 
+  dplyr::mutate(Entity_type = ifelse(`Entity type` == "gene", "Gene", "STR")) %>%
+  dplyr::mutate(Panel = ifelse(Level4 == "Adult onset leukodystrophy", "Adult-enriched IWMD", "Childhood-enriched IWMD")) %>% 
+  dplyr::mutate(mode_of_inheritance = case_when(grepl("paternally imprinted|maternally imprinted", Model_Of_Inheritance) ~"Imprinted",
+                                                 grepl("BOTH|\nAutosomal|ive , Aut|ant , Aut", Model_Of_Inheritance) ~"MONO AND BIALLELIC",
+                                                  grepl("BIALLELIC|recessive|Recessive", Model_Of_Inheritance) ~"BIALLELIC", 
+                                                    grepl("X-LINKED|X-linked", Model_Of_Inheritance) ~"X-LINKED",
+                                                     grepl("MONOALLELIC|dominant|Dominant", Model_Of_Inheritance) ~"MONOALLELIC",
+                                                      grepl("MITOCHONDRIAL|Mitochondrial|mitochondrial", Model_Of_Inheritance) ~"MITOCHONDRIAL",
+                                                        grepl("Isolated|Somatic|Multifactorial|Unknown", Model_Of_Inheritance) ~"Unknown"))
+
+saveRDS(combined_gene_set_panelapp_modified, file = "/home/MinaRyten/Kylie/Functional_genomic_annotation_IWMD/raw_data/combined_gene_set_panelapp_modified.rds")
+
+```
+
+# Model of pathogenicity
+
+```{r}
+
+combined_gene_set_panelapp_modified$Panel = factor(combined_gene_set_panelapp_modified$Panel, levels = c('Childhood-enriched IWMD', 'Adult-enriched IWMD'))
+
+mode_of_inheritance <- combined_gene_set_panelapp_modified %>% 
+  select(mode_of_inheritance, Panel, symbol) %>% 
+  unique() %>% 
+  ggplot(data = ., aes(x = fct_infreq(mode_of_inheritance), fill = Panel)) +
+  geom_bar(stat = "count", position = position_dodge(preserve = "single")) + theme_classic() +
+  scale_fill_manual(values = c("midnightblue", "cornflowerblue")) +
+  labs (x = "Mode of Inheritance", y = "Number of entities") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+```{r}
+
+mode_proportions <- combined_gene_set_panelapp_modified %>% 
+  select("symbol", "Panel", "mode_of_inheritance") %>% 
+  unique()
+
+mode_proportions_summary <- mode_proportions %>% 
+  group_by(Panel) %>% 
+  count(mode_of_inheritance)
+
+mode_proportions <- mode_proportions_summary%>%                                 
+  group_by(Panel) %>%
+  mutate(perc = n / sum(n)) %>% 
+  as.data.frame()
+
+mode_proportions$Panel = factor(mode_proportions$Panel, levels = c('Childhood-enriched IWMD', 'Adult-enriched IWMD'))
+
+mode_of_inheritance_proportion <- mode_proportions %>% 
+  select("Panel", "mode_of_inheritance", "perc") %>% 
+  ggplot(data = ., aes(x = reorder(mode_of_inheritance, -perc), y = perc, fill = Panel)) + 
+  geom_bar(stat = "identity", position = position_dodge(preserve = "single")) +
+  theme_classic() +
+  scale_fill_manual(values = c("midnightblue", "cornflowerblue")) +
+  labs (x = "Mode of Inheritance", y = "Proportion of entities") +
+  theme(axis.text.x = element_text(angle = 67.5, hjust = 1), legend.position = "bottom", 
+        text = element_text(size = 15), legend.key.size = unit(1, 'cm'), legend.text = element_text(size=10), 
+        legend.title = element_text(size=15)) +
+  guides(fill = guide_legend(nrow = 2, byrow = TRUE))
+
+```
+
+```{r, echo=FALSE, fig.width=10, fig.height=10}
+
+plot(mode_of_inheritance)
+
+plot(mode_of_inheritance_proportion)
+
+```
+
+#System involvement
+
+```{r}
+
+HPO_terms_per_gene <- read_csv("/home/MinaRyten/Kylie/Functional_genomic_annotation_IWMD/raw_data/all_panels_HPO_entrez_final.csv")
+
+comparisons2 <- list(c("Childhood-enriched IWMD", "Adult-enriched IWMD"))
+
+number_HPO_terms_violin <- HPO_terms_per_gene %>% 
+  mutate(Panel = str_replace(Panel, "Child enriched IWMD genes", "Childhood-enriched IWMD")) %>% 
+  mutate(Panel = str_replace(Panel, "Adult enriched IWMD genes", "Adult-enriched IWMD")) %>% 
+  mutate(Panel = factor(Panel, levels = c('Childhood-enriched IWMD', 'Adult-enriched IWMD'))) %>%
+  ggplot(aes(x= Panel, y = Freq, fill = factor(Panel))) +
+  geom_violin() +
+  stat_compare_means() +
+  theme_bw()  +
+  labs (x = "Gene Panel", y = "Number of HPO terms associated per gene") +
+  scale_x_discrete(labels = function(x) stringr::str_wrap(x, width = 15)) +
+  scale_y_continuous() +
+  scale_fill_manual(values = c("midnightblue", "cornflowerblue")) +
+  theme(legend.position = "none") +
+  theme(plot.title = element_text(face="bold"), axis.text.x = element_text(hjust = 0.5, vjust = 0.5), text = element_text(size = 8))
+
+HPO_system_proportions <- read_csv("/home/MinaRyten/Kylie/Functional_genomic_annotation_IWMD/raw_data/HPO_system_proportions.csv")
+
+HPO_system_proportions <- HPO_system_proportions %>% 
+  mutate(Panel = str_replace(Panel, "HPO derived IWMD genes", "Child enriched IWMD genes")) %>% 
+  mutate(Panel = str_replace(Panel, "Adult onset leukodystrophy", "Adult enriched IWMD genes"))
+
+system_involvement <- HPO_system_proportions %>% filter(., Panel != "Childhood onset leukodystrophy", type != "nervous_system") %>% 
+  mutate(Panel = str_replace(Panel, "Child enriched IWMD genes", "Childhood-enriched IWMD")) %>% 
+  mutate(Panel = str_replace(Panel, "Adult enriched IWMD genes", "Adult-enriched IWMD")) %>% 
+  mutate(Panel = factor(Panel, levels = c('Childhood-enriched IWMD', 'Adult-enriched IWMD'))) %>%
+  ggplot(aes(x= reorder(type, -Proportion), y = Proportion, fill = Panel))+
+  geom_bar(stat = "identity", position = position_dodge(preserve = "single")) + theme_classic() +
+  scale_fill_manual(values = c("midnightblue", "cornflowerblue")) +
+  labs (x = "System involved", y = "Proportion of genes for Panel") +
+  theme(axis.text.x = element_text(angle = 67.5, hjust = 1, vjust = 1), text = element_text(size = 8), 
+        legend.key.size = unit(0.5, 'cm'), legend.text = element_text(size=8), legend.title = element_text(size=8)) +
+  theme(legend.position="bottom")
+
+system_involvement_proportions <- HPO_system_proportions %>% filter(., Panel != "Childhood onset leukodystrophy", type != "nervous_system") %>% 
+  mutate(Panel = str_replace(Panel, "Child enriched IWMD genes", "Childhood-enriched IWMD")) %>% 
+  mutate(Panel = str_replace(Panel, "Adult enriched IWMD genes", "Adult-enriched IWMD"))
+
+system_involvement_proportions_table <- table(system_involvement_proportions$Panel,
+                                               system_involvement_proportions$type)
+
+# Collapse across the third dimension (summing counts for each HPO system per panel)
+collapsed_table <- apply(system_involvement_proportions_table, c(1, 2), sum)
+
+# Check result
+str(collapsed_table)
+# Should now be a 22 x 2 matrix
+
+# Run chi-squared test
+system_involvement_proportions_chisquare <- chisq.test(collapsed_table)
+
+HPO_terms_systems_and_genes <- read_csv("/home/MinaRyten/Kylie/Functional_genomic_annotation_IWMD/raw_data/HPO_terms_systems_and_genes")
+#Load HPO gene to phenotype file and rename columns 
+HPO_gene_to_phenotype <- read.delim("/home/MinaRyten/Kylie/Functional_genomic_annotation_IWMD/raw_data/HPO_gene_to_phenotype.txt", 
+                                    header=FALSE, comment.char="#")
+
+HPO_gene_to_phenotype <- dplyr::rename(HPO_gene_to_phenotype, "entrez_id" = "V1", "gene_name" = "V2", "HPO_id" = "V3", "HPO_term" = "V4", "frequency" = "V5", "frequency_HPO" = "V6", "comment" = "V7", "source" = "V8", "source_ID" = "V9") 
+
+#Pull in Gene ID info in order to add ensembl gene id's to the HPO gene to phenotype data
+GeneIDs <- read_delim("/home/MinaRyten/Kylie/Functional_genomic_annotation_IWMD/raw_data/GeneIDs.txt", 
+    delim = "\t", escape_double = FALSE, 
+    trim_ws = TRUE) %>% 
+  select('entrez_id', 'ensembl_gene_id', 'hgnc_id', 'symbol') %>% 
+  rename("gene_name" = "symbol")
+
+HPO_phenotype_gene_ids <- left_join(HPO_gene_to_phenotype, GeneIDs) %>% 
+  unique()
+
+child_genes <- combined_gene_set_panelapp_modified %>% dplyr::filter(Panel == "Childhood-enriched IWMD") %>% 
+  dplyr::left_join(HPO_phenotype_gene_ids) %>% 
+  dplyr::select("gene_name", "hgnc_id", "entrez_id", "Panel") %>% 
+  unique()
+
+adult_genes <- combined_gene_set_panelapp_modified %>% dplyr::filter(Panel == "Adult-enriched IWMD") %>% 
+  dplyr::left_join(HPO_phenotype_gene_ids) %>% 
+  dplyr::select("gene_name", "hgnc_id", "entrez_id", "Panel") %>% 
+  unique()
+
+all_IWMD_panels <- dplyr::bind_rows(adult_genes, child_genes) 
+
+HPO_phenotype_tidy_IWMD <- left_join(all_IWMD_panels, HPO_terms_systems_and_genes) %>% 
+  dplyr::select(gene_name, Panel, 6:28) 
+
+child_enriched <- HPO_phenotype_tidy_IWMD %>%
+  filter(Panel == "Childhood-enriched IWMD") %>%
+  group_by(gene_name) %>%
+  summarise(across(where(is.numeric), mean, na.rm = TRUE), .groups = "drop")
+
+child_enriched$Panel <- c("Childhood-enriched IWMD")
+child_enriched <- child_enriched %>%
+  mutate(across(where(is.numeric), ~ replace_na(., 0)))
+child_enriched$freq <- rowSums(child_enriched == 1)
+
+adult_enriched <- HPO_phenotype_tidy_IWMD %>%
+  filter(Panel == "Adult-enriched IWMD") %>%
+  group_by(gene_name) %>%
+  summarise(across(where(is.numeric), mean, na.rm = TRUE), .groups = "drop")
+
+adult_enriched$Panel <- c("Adult-enriched IWMD")
+adult_enriched <- adult_enriched %>%
+  mutate(across(where(is.numeric), ~ replace_na(., 0)))
+
+adult_enriched$freq <- rowSums(adult_enriched == 1)
+
+child_adult_systems <- rbind(child_enriched, adult_enriched)
+
+#Count and plot
+number_systems_per_gene_plot <- child_adult_systems %>% 
+  arrange(Panel) %>%
+  mutate(Panel = factor(Panel, levels = c('Childhood-enriched IWMD', 'Adult-enriched IWMD'))) %>%
+  ggplot(aes(x= Panel, y = freq, fill = Panel)) +
+  geom_boxplot() +
+  stat_compare_means() +
+  theme_bw()  +
+  labs (x = "Gene Panel", y = "Number of systems associated per gene") +
+  scale_x_discrete(labels = function(x) stringr::str_wrap(x, width = 15)) +
+  scale_y_continuous() +
+  scale_fill_manual(values = c("midnightblue", "cornflowerblue")) +
+  theme(legend.position = "none") +
+  theme(plot.title = element_text(face="bold"), axis.text.x = element_text(hjust = 0.5, vjust = 0.5), text = element_text(size = 8))
+
+number_systems_per_gene_plot + stat_compare_means(comparisons = comparisons2, hide.ns = FALSE) 
+
+```
+
+```{r}
+sessionInfo()
+```

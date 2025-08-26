@@ -1,0 +1,431 @@
+---
+title: "IWMD genic features"
+author: "Kylie Montgomery"
+date: 01/09/2024
+output:
+  html_document:
+    code_folding: show
+    df_print: paged
+    highlight: kate
+    theme: paper
+    toc: yes
+    toc_depth: 2
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+# Load libraries
+library(ggpubr)
+library(readxl)
+library(stringr)
+library(tidyverse)
+library(forcats)
+
+knitr::opts_chunk$set(echo = T, warning = F, message= F)
+```
+
+# R Markdown
+
+## PanelApp and HPO-associated gene sets
+1. Adult onset leukodystrophy
+2. Childhood onset leukodystrophy
+3. HPO derived IWMD gene list
+
+These were assessed in IWMD gene panels.Rmd
+
+# Further classification and characterisation of IWMD genes
+ - By gene, expression/ coexpression, variation features
+ - Table of all proposed predictors as below
+
+```{r}
+
+ML_predictors <- read_csv("/home/MinaRyten/Kylie/Functional_genomic_annotation_IWMD/raw_data/ML_predictors_input.csv")
+
+ML_predictors %>% dplyr::select(Predictor) %>% as_tibble()
+
+# Load genic features
+# Without missing values
+
+load_predictors <- read_csv("/home/MinaRyten/Kylie/Functional_genomic_annotation_IWMD/raw_data/updated_predictor_matrix_w_ataxia_genes.csv") %>% 
+  select(-c(161:180, 228, 230, 232, 233, 275, 315, 317)) 
+
+load_predictors <- load_predictors %>%
+  rename_with(~ "exon_width", .cols = matches("^exon_width\\.y$")) %>%
+  rename_with(~ "intron_width", .cols = matches("^intron_width\\.y$")) %>%
+  rename_with(~ "ensembl_gene_id", .cols = matches("^gene_id\\.x$")) %>%
+  rename_with(~ "width", .cols = matches("^width\\.x$"))
+
+which(str_detect(colnames(load_predictors), fixed("width.x")))
+```
+
+# Classification of features as per G2PML
+Note these are for the 17,635 genes from PanelApp: Function G2PML::fromGenes2MLData(genes=genes,which.controls=“allgenome”) where genes refers to derivation from function getGenesFromPanelApp. For ML predictor, would need to consider whether should extend beyond 17,635 genes in total (Ensembl v.72). Control gene set doesn’t include Neurology and Neurodevelopmental disorders panel. ## To save re-running, upload re-run one for mitochondrial genes as below therefore, ignore “condition”
+
+```{r}
+
+# Table of all G2PML predictors for IWMD panel genes
+combined_gene_set_panelapp_modified <- readRDS("/home/MinaRyten/Kylie/Functional_genomic_annotation_IWMD/raw_data/combined_gene_set_panelapp_modified.rds")
+
+load_predictors %>% as_tibble()
+
+load_predictors_IWMD <- left_join(combined_gene_set_panelapp_modified, load_predictors, by = c("ensembl_gene_id" = "ensembl_gene_id")) %>% 
+  unique()
+
+load_predictors_IWMD %>% as_tibble()
+```
+
+```{r}
+
+# Gather GENE FEATURES for comparison 
+
+load_predictors_IWMD_gathered <- load_predictors_IWMD %>% tidyr::gather("type", "Gene_feature", 40:46) %>%
+  mutate(Panel1 = ifelse(Panel == "Adult-enriched IWMD", "Adult-enriched IWMD", "Childhood-enriched IWMD"))
+comparisons1 <- list(c("Childhood-enriched IWMD, Adult-enriched IWMD"))
+
+load_predictors_IWMD_gathered$Panel1 <- factor(load_predictors_IWMD_gathered$Panel1, levels = c('Childhood-enriched IWMD', 'Adult-enriched IWMD'))
+
+gene_features <- ggplot(load_predictors_IWMD_gathered, aes(x= Panel1, y=Gene_feature, fill = Panel1))+
+  geom_boxplot() + theme_classic() +
+  facet_wrap(~type, scales = "free") +
+  stat_compare_means(comparisons = comparisons1, hide.ns = FALSE, digits = 2) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  labs(y = "Gene feature", x = "Panel") +
+  scale_fill_manual(values = c("midnightblue", "cornflowerblue")) + 
+  theme(legend.position="bottom")
+
+```
+
+```{r, echo=FALSE, fig.width=10, fig.height=15}
+
+plot(gene_features)
+
+```
+
+```{r}
+
+# But are there any differences between gene features of IWMD genes and other protein-coding genes
+
+## Control genes (protein coding in genome) with no IWMD genes
+### Comparison maybe skewed as many more controls than cases but gives an estimate of the distribution
+
+#First compare with brain specific and brain enriched genes
+#https://www.proteinatlas.org/humanproteome/brain 25/03/2024
+
+brain_genes <- read_delim("/home/MinaRyten/Kylie/Functional_genomic_annotation_IWMD/raw_data/tissue_category_rna_brain_Tissue.tsv", 
+    delim = "\t", escape_double = FALSE, 
+    trim_ws = TRUE)
+
+brain_specific_genes <- read_delim("/home/MinaRyten/Kylie/Functional_genomic_annotation_IWMD/raw_data/tissue_category_rna_brain_Detected.tsv", 
+    delim = "\t", escape_double = FALSE, 
+    trim_ws = TRUE)
+brain_genes_all <- rbind(brain_genes, brain_specific_genes) %>% select(., c("Gene", "Ensembl")) %>% 
+  rename(., 'symbol' = 'Gene', 'ensembl_gene_id' = 'Ensembl') %>% 
+  mutate(., Panel = 'brain_genes')
+
+brain_controls <- dplyr::left_join(brain_genes_all, load_predictors, by = 'ensembl_gene_id')
+
+load_predictors_IWMD_brain_controls <- bind_rows(load_predictors_IWMD, brain_controls)
+
+IWMD_brain_controls_gathered <- load_predictors_IWMD_brain_controls %>% tidyr::gather("type", "Gene_feature", 40:45) %>%
+  mutate(Panel1 = ifelse(Panel == "Adult-enriched IWMD", "Adult-enriched IWMD",
+                                ifelse(Panel == "Childhood-enriched IWMD", "Childhood-enriched IWMD", "Brain genes"))) %>% unique()
+
+comparisons_brain <- list(c("Childhood-enriched IWMD", "Adult-enriched IWMD"), c("Childhood-enriched IWMD", "Brain genes"), c("Adult-enriched IWMD", "Brain genes"))
+
+fun_median <- function(x){
+  return(data.frame(y=median(x),label=median(x,na.rm=T)))
+}
+
+IWMD_brain_controls_gathered$Panel1 <- factor(IWMD_brain_controls_gathered$Panel1, levels = c('Childhood-enriched IWMD', 'Adult-enriched IWMD', 'Brain genes'))
+
+gene_features_vs_brain <- ggplot(IWMD_brain_controls_gathered, aes(x= Panel1, y=Gene_feature, fill = Panel1)) +
+  geom_boxplot() + theme_classic() +
+  facet_wrap(~type, scales = "free_y") +
+  stat_compare_means(comparisons = comparisons_brain, hide.ns = FALSE) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  labs(y = "Gene feature", x = "Panel1") +
+  scale_fill_manual(values = c("midnightblue", "cornflowerblue", "azure4")) + 
+  theme(legend.position="bottom")+
+  stat_summary(fun = median, geom="point",colour="darkred", size=2) +
+  stat_summary(fun.data = fun_median, geom="text", vjust= 1.6)
+
+#Now compare with all other coding genes as a control set
+control_genes_no_IWMD <- dplyr::anti_join(load_predictors, load_predictors_IWMD, by = 'ensembl_gene_id')
+
+control_genes_no_IWMD <- control_genes_no_IWMD %>% mutate(Panel = "Not IWMD")
+
+all_genes_comparison <- bind_rows(control_genes_no_IWMD, load_predictors_IWMD)
+
+saveRDS(all_genes_comparison, file = "/home/MinaRyten/Kylie/Functional_genomic_annotation_IWMD/raw_data/all_genes_comparison.rds") #For cell type specificity Rmd later
+
+all_genes_comparison_gathered <- all_genes_comparison %>% tidyr::gather("type", "Gene_feature", 2:8) %>%
+  mutate(Panel1 = ifelse(Panel == "Adult-enriched IWMD", "Adult-enriched IWMD",
+                                ifelse(Panel == "Childhood-enriched IWMD", "Childhood-enriched IWMD", "Not IWMD")))
+
+comparisons2 <- list(c("Childhood-enriched IWMD", "Adult-enriched IWMD"), c("Childhood-enriched IWMD", "Not IWMD"), c("Adult-enriched IWMD", "Not IWMD"))
+
+fun_median <- function(x){
+  return(data.frame(y=median(x),label=median(x,na.rm=T)))
+}
+
+all_genes_comparison_gathered$Panel1 <- factor(all_genes_comparison_gathered$Panel1, levels = c('Childhood-enriched IWMD', 'Adult-enriched IWMD', 'Not IWMD'))
+
+gene_features_vs_controls <- ggplot(all_genes_comparison_gathered, aes(x= Panel1, y=Gene_feature, fill = Panel1)) +
+  geom_boxplot() + theme_classic() +
+  facet_wrap(~type, scales = "free_y") +
+  stat_compare_means(comparisons = comparisons2, hide.ns = FALSE, label = "p.signif") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  labs(y = "Gene feature", x = "Panel") +
+  scale_fill_manual(values = c("midnightblue", "cornflowerblue", "azure4")) + 
+  theme(legend.position="bottom")+
+  stat_summary(fun = median, geom="point",colour="darkred", size=2) +
+  stat_summary(fun.data = fun_median, geom="text", vjust= 1.6)
+
+all_genes_comparison_gathered_limited <- all_genes_comparison %>% tidyr::gather("type", "Gene_feature", c(3, 5, 9)) %>%
+  mutate(Panel1 = ifelse(Panel == "Adult-enriched IWMD", "Adult-enriched IWMD",
+                                ifelse(Panel == "Childhood-enriched IWMD", "Childhood-enriched IWMD", "Not IWMD")))
+
+all_genes_comparison_gathered_limited$type <- factor(all_genes_comparison_gathered_limited$type, levels = c('TranscriptCount', 'NumJunctions', 'LoFTool'))
+
+all_genes_comparison_gathered_limited$Panel1 <- factor(all_genes_comparison_gathered_limited$Panel1, levels = c('Childhood-enriched IWMD', 'Adult-enriched IWMD', 'Not IWMD'))
+  
+gene_features_vs_controls_limited <- ggplot(all_genes_comparison_gathered_limited, aes(x= Panel1, y=Gene_feature, fill = Panel1)) +
+  geom_boxplot() + theme_classic() +
+  facet_wrap(~type, scales = "free_y") +
+  stat_compare_means(comparisons = comparisons2, hide.ns = TRUE) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  labs(y = "Gene feature", x = "Panel") +
+  scale_fill_manual(values = c("midnightblue", "cornflowerblue", "azure4")) + 
+  theme(legend.position="bottom")+
+  stat_summary(fun = median, geom="point",colour="darkred", size=2) +
+  stat_summary(fun.data = fun_median, geom="text", vjust= 1.6)
+
+```
+
+```{r, echo=FALSE, fig.width=10, fig.height=15}
+
+plot(gene_features_vs_controls)
+
+```
+
+## G2PML Genetic Variation
+
+```{r}
+
+all_genes_comparison_gathered_variation <- all_genes_comparison %>% tidyr::gather("type", "Gene_variation", 9:19) %>%
+  mutate(Panel1 = ifelse(Panel == "Adult-enriched IWMD", "Adult-enriched IWMD",
+                                ifelse(Panel == "Childhood-enriched IWMD", "Childhood-enriched IWMD", "Not IWMD")))
+
+comparisons3 <- list(c("Childhood-enriched IWMD", "Adult-enriched IWMD"), c("Childhood-enriched IWMD", "Not IWMD"), c("Adult-enriched IWMD", "Not IWMD"))
+
+fun_median <- function(x){
+  return(data.frame(y=median(x),label=round(median(x,na.rm=T), 2),nsmall = 3))
+}
+
+all_genes_comparison_gathered_variation$Panel1 <- factor(all_genes_comparison_gathered_variation$Panel1, levels = c('Childhood-enriched IWMD', 'Adult-enriched IWMD', 'Not IWMD'))
+
+genetic_variation <- ggplot(all_genes_comparison_gathered_variation, aes(x= Panel1, y=Gene_variation, fill = Panel1))+
+  geom_boxplot() + theme_classic() +
+  facet_wrap(~type, scales = "free_y") +
+  stat_compare_means(comparisons = comparisons3, hide.ns = FALSE) +
+  theme(axis.text.x = element_text(angle = 70, hjust = 1))+
+  labs(y = "Gene feature", x = "Panel") +
+  scale_fill_manual(values = c("midnightblue", "cornflowerblue", "azure4")) + 
+  theme(legend.position="bottom")+
+  stat_summary(fun = median, geom="point",colour="darkred", size=2) +
+  stat_summary(fun.data = fun_median, geom="text", vjust= -0.7)
+
+```
+
+```{r, echo=FALSE, fig.width=10, fig.height=15}
+
+plot(genetic_variation)
+
+```
+
+
+# G2PML Expression/ Co-expression
+- Module membership
+- Expression
+- Adjacency
+```{r}
+
+# Numbers of genes per tissue by Panel
+load_predictors_IWMD_adult <- load_predictors_IWMD %>% filter(Panel == "Adult-enriched IWMD") 
+load_predictors_IWMD_child <- load_predictors_IWMD %>% filter(Panel == "Childhood-enriched IWMD") 
+
+adult_expr_sums <- as.data.frame(colSums(load_predictors_IWMD_adult[, 58:198], na.rm = TRUE)) 
+adult_expr_sums$expression <- row.names(adult_expr_sums)
+adult_expr_sums_summary <- adult_expr_sums %>% 
+  mutate(expression_sums = `colSums(load_predictors_IWMD_adult[, 58:198], na.rm = TRUE)`) %>%
+  dplyr::select(-`colSums(load_predictors_IWMD_adult[, 58:198], na.rm = TRUE)`) %>%
+  mutate(proportion_expression = expression_sums/nrow(load_predictors_IWMD_adult)) %>%
+  mutate(Panel = "Adult-enriched IWMD") 
+
+child_expr_sums <- as.data.frame(colSums(load_predictors_IWMD_child[, 58:198], na.rm = TRUE)) 
+child_expr_sums$expression <- row.names(child_expr_sums)
+child_expr_sums_summary <- child_expr_sums %>% 
+  mutate(expression_sums = `colSums(load_predictors_IWMD_child[, 58:198], na.rm = TRUE)`) %>%
+  dplyr::select(-`colSums(load_predictors_IWMD_child[, 58:198], na.rm = TRUE)`) %>%
+  mutate(proportion_expression = expression_sums/nrow(load_predictors_IWMD_child)) %>%
+  mutate(Panel = "Childhood-enriched IWMD") 
+
+all_expr_sums <- bind_rows(adult_expr_sums_summary[48:94,], child_expr_sums_summary[48:94,])
+
+all_MM_sums <- bind_rows(adult_expr_sums_summary[1:47,], child_expr_sums_summary[1:47,])
+
+all_adj_sums <- bind_rows(adult_expr_sums_summary[95:141,], child_expr_sums_summary[95:141,])
+
+```
+
+# 1. Expression
+
+```{r}
+
+# Remove sex-specific tissues
+all_expr_sums <- all_expr_sums %>% 
+  filter(!(expression %in% c("Testis", "Uterus", "Ovary", "Vagina", "Prostate")))
+
+# Absolute number of genes per tissue 
+all_expr_sums$Panel <- factor(all_expr_sums$Panel, levels = c('Childhood-enriched IWMD', 'Adult-enriched IWMD'))
+
+genes_per_tissue <- ggplot(all_expr_sums, aes(x= reorder(expression, -expression_sums), y = expression_sums, fill = Panel))+
+  geom_bar(stat = "identity") + theme_classic() +
+  facet_wrap(~Panel, ncol = 1, scales = "free_y") +
+  scale_fill_manual(values = c("midnightblue", "cornflowerblue")) +
+  labs (x = "Tissue", y = "Number of genes") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position="bottom") 
+
+#Leukocyte specific genes
+leukocyte_IWMD_genes <- load_predictors_IWMD %>% select(c("Panel", "symbol", "CellsLymphocytes")) %>% 
+  subset(CellsLymphocytes == 1)
+
+```
+
+```{r, echo=FALSE}
+
+plot(genes_per_tissue)
+
+```
+
+```{r}
+
+# Proportion of genes (out of all PanelApp genes) per tissue zoomed in
+proportion_genes_per_tissue <- ggplot(all_expr_sums, aes(x= reorder(expression, -proportion_expression), y = proportion_expression, fill = Panel))+
+  geom_bar(stat = "identity") + theme_classic() +
+  ylim(0, 0.3) +
+  facet_wrap(~Panel, ncol = 1, scales = "free_y") +
+  scale_fill_manual(values = c("midnightblue", "cornflowerblue")) +
+  labs (x = "Tissue", y = "Proportion of genes for Panel") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position="bottom")
+
+# Proportion of genes (out of all PanelApp genes) per tissue out of 1
+proportion_genes_per_tissue1 <- ggplot(all_expr_sums, aes(x= reorder(expression, -proportion_expression), y = proportion_expression, fill = Panel))+
+  geom_bar(stat = "identity") + theme_classic() +
+  facet_wrap(~Panel, ncol = 1, scales = "free_y") +
+  scale_fill_manual(values = c("midnightblue", "cornflowerblue")) +
+  ylim(0, 1) +
+  labs (x = "Tissue specific expression", y = "Proportion of genes per Panel") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position="bottom", text = element_text(size = 8))
+
+```
+
+```{r, echo=FALSE}
+
+plot(proportion_genes_per_tissue + ggtitle("Proportion of gene expression by tissue-zoomed in"))
+
+plot(proportion_genes_per_tissue1 + ggtitle("Proportion of gene expression by tissue-zoomed out"))
+
+```
+
+# 2. Module Membership
+```{r}
+
+# Remove sex-specific tissues and arrange in descending order of number of genes
+all_MM_sums <- all_MM_sums %>% arrange(expression_sums) %>%
+  mutate(expression = fct_reorder(expression, expression_sums, .desc = TRUE)) %>%
+  filter(!(expression %in% c("MMTestis", "MMUterus", "MMOvary", "MMVagina", "MMProstate")))
+
+# Absolute number of genes per tissue
+
+all_MM_sums$Panel <- factor(all_MM_sums$Panel, levels = c('Childhood-enriched IWMD', 'Adult-enriched IWMD'))
+
+absolute_genes_per_tissue <- ggplot(all_MM_sums, aes(x= expression, y = expression_sums, fill = Panel)) +
+  geom_bar(stat = "identity") + theme_classic() +
+  facet_wrap(~Panel, ncol = 1, scales = "free_y") +
+  scale_fill_manual(values = c("midnightblue", "cornflowerblue")) +
+  labs (x = "Tissue MM", y = "Number of genes")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position="bottom")
+
+```
+
+```{r, echo=FALSE}
+
+plot(absolute_genes_per_tissue)
+
+```
+
+```{r}
+# Proportion of genes (out of all IWMD genes) per tissue
+proportion_absolute_genes_per_tissue <- ggplot(all_MM_sums, aes(x= expression, y = proportion_expression, fill = Panel))+
+  geom_bar(stat = "identity") + theme_classic() +
+  facet_wrap(~Panel, ncol = 1, scales = "free_y") +
+  scale_fill_manual(values = c("midnightblue", "cornflowerblue")) +
+  labs (x = "Tissue MM", y = "Proportion of genes for Panel") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position="bottom", text = element_text(size = 8))
+
+```
+
+```{r, echo=FALSE}
+
+plot(proportion_absolute_genes_per_tissue + ggtitle("Proportion of gene expression by module membership"))
+
+```
+
+# 3. Adjacency
+```{r}
+
+# Remove sex-specific tissues and arrange in descending order of number of genes
+all_adj_sums <- all_adj_sums %>% arrange(expression_sums) %>%
+  mutate(expression = fct_reorder(expression, expression_sums, .desc = TRUE)) %>%
+  filter(!(expression %in% c("AdjTestis", "AdjUterus", "AdjOvary", "AdjVagina", "AdjProstate")))
+
+# Absolute number of genes per tissue
+all_adj_sums$Panel <- factor(all_adj_sums$Panel, levels = c('Childhood-enriched IWMD', 'Adult-enriched IWMD'))
+
+adjacency_absolute_genes_per_tissue <- ggplot(all_adj_sums, aes(x= expression, y = expression_sums, fill = Panel))+
+  geom_bar(stat = "identity") + theme_classic() +
+  facet_wrap(~Panel, ncol = 1, scales = "free_y") +
+  scale_fill_manual(values = c("midnightblue", "cornflowerblue")) +
+  labs (x = "Tissue Adjacency", y = "Number of genes")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position="bottom")
+
+```
+
+```{r, echo=FALSE}
+
+plot(adjacency_absolute_genes_per_tissue)
+
+```
+
+```{r}
+
+# Proportion of genes (out of all IWMD genes) per tissue
+adjacency_proportion_genes_per_tissue <- ggplot(all_adj_sums, aes(x= expression, y = proportion_expression, fill = Panel))+
+  geom_bar(stat = "identity") + theme_classic() +
+  facet_wrap(~Panel, ncol = 1, scales = "free_y") +
+  scale_fill_manual(values = c("midnightblue", "cornflowerblue")) +
+  labs (x = "Tissue Adjacency", y = "Proportion of genes for Panel") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position="bottom", text = element_text(size = 8))
+
+```
+
+```{r, echo=FALSE}
+
+plot(adjacency_proportion_genes_per_tissue + ggtitle("Proportion of gene expression by adjacency"))
+
+```
+
+```{r}
+sessionInfo()
+```

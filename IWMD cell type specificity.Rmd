@@ -1,0 +1,356 @@
+---
+title: "IWMD celltype specificity"
+author: "Kylie Montgomery"
+date: 01/09/2024
+output:
+  html_document:
+    code_folding: show
+    df_print: paged
+    highlight: kate
+    theme: paper
+    toc: yes
+    toc_depth: 2
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+# Load libraries
+library(ggpubr)
+library(tidyverse)
+library(ggpubr)
+library(forcats)
+library(RColorBrewer)
+
+knitr::opts_chunk$set(echo = T, warning = F, message= F)
+```
+
+# R Markdown
+
+## PanelApp and HPO-associated gene sets
+1. Adult onset leukodystrophy
+2. Childhood onset leukodystrophy
+3. HPO derived IWMD gene list
+
+These were assessed in IWMD gene panels.Rmd
+
+# Cell-type-specificity
+ To start with, we can incorporate mouse-level data from Zeisel (Zeisel et al. 2018, http://mousebrain.org/), whose secondary level cell data includes cerebellar neurons; more specifically, granular layer neurons, Purkinje cells, molecular layer interneurons, inhibitory neurons amongst secondary level cell data.
+ Description taken from: https://github.com/RHReynolds/MarkerGenes/blob/master/misc_data/Zeisel2018_ClusterDescriptions.csv
+ Specificity of a gene represents the proportion of the total expression of a gene found in one cell type as compared to that in all cell types (i.e., the mean expression in one cell type divided by the mean expression in all cell types). If the expression of a gene is shared between two or more cell types, it will get a lower specificity measure. For a description of how it’s calculated, please refer to Skene et al. 2016.
+ Each .rda file represents one single-cell dataset and typically contains two lists (some datasets may only have level 1 cell types). These two lists represent: Level 1 cell types – broad cell type categories e.g. astrocyte, glutamatergic neuron, etc. Level 2 cell types – subtypes of the broader cell type categories
+```{r}
+
+all_genes_comparison <- readRDS("/home/MinaRyten/Kylie/Functional_genomic_annotation_IWMD/raw_data/all_genes_comparison.rds")
+
+fun_median1 <- function(x){
+  return(data.frame(y=median(x),label=round(median(x,na.rm=T), 4),nsmall = 3))
+}
+
+# 126 missing
+all_genes_comparison$`Cerebellum neurons.x` %>% is.na() %>% sum()
+
+```
+
+```{r}
+
+# 4149 missing from matrix of features as no human ortholog equiv or equiv mouse gene not covered in Zeisel for level 2
+
+```
+
+What is the distribution of specificity indices to help aid decision in substituting missing values? – Assign 0 or median value to NA? – 0 means no specificity so inferring 0 across all cell-types means that no weight is given to a particular cell type – ** Check with Juan that no ML predictors would not be driven by 0 then in that case
+
+```{r}
+
+#Level 1
+
+all_genes_comparison %>% tidyr::gather("type", "level1", 238:250) %>%
+ggplot(aes(x= level1, colour = type))+
+  geom_density() + theme_classic()  +
+  labs (x = "Cell-type-specificity index", y = "Density") +
+  scale_colour_manual(values = colorRampPalette(brewer.pal(13, "Set1"))(13))
+
+```
+
+```{r}
+
+# Level 2
+all_genes_comparison %>% tidyr::gather("type", "level2", 251:257) %>%
+ggplot(aes(x= level2, colour = type))+
+  geom_density() + theme_classic()  +
+  labs (x = "Cell-type-specificity index", y = "Density")
+
+```
+
+```{r}
+
+# replace missing with 0
+all_genes_w_cell_specificity_no_missing <- all_genes_comparison %>%
+  tidyr::replace_na(list(Neuroblasts=0, Granule_neurons=0, Glutamatergic_neuroblasts=0, Granule_interneurons=0, 
+                         Purkinje_cells=0, Molecular_interneurons=0, Inhibitory_neurons=0,
+                         Astrocytes=0, `Cerebellum neurons`=0, `Cholinergic and monoaminergic neurons`=0,
+                        `Dentate gyrus granule neurons`=0, `Glutamatergic neuroblasts`=0, Microglia=0,
+                        `Non-glutamatergic neuroblasts`=0, Oligodendrocytes=0, `Peptidergic neurons`=0,
+                        `Perivascular macrophages`=0, `Telencephalon inhibitory interneurons`=0,
+                        `Telencephalon projecting excitatory neurons`=0, `Telencephalon projecting inhibitory neurons`=0))
+
+```
+# Cell-type-specific data with reference to IWMD disease panels – Level 1
+
+```{r}
+comparisons <- list(c("Childhood-enriched IWMD", "Adult-enriched IWMD"), c("Childhood-enriched IWMD", "Not IWMD"), 
+                     c("Adult-enriched IWMD", "Not IWMD"))
+
+#Level 1
+cell_type_plot <- all_genes_w_cell_specificity_no_missing %>% tidyr::gather(type, cell_type, 238:250) %>%
+  ggplot(aes(x= Panel, y = cell_type, fill = Panel))+
+  geom_boxplot() + theme_classic() +
+  facet_wrap(~type, scales = "free", ncol = 2) +
+  scale_fill_manual(values = c("midnightblue", "cornflowerblue", "azure4")) +
+  labs (x = "Gene Panel", y = "Cell-type-specificity index") +
+  theme(axis.text.x = element_blank(), legend.position="bottom")+
+  stat_compare_means(comparisons = comparisons, hide.ns = FALSE) +
+  stat_summary(fun = median, geom="point",colour="darkred", size=2) +
+  stat_summary(fun.data = fun_median1, geom="text", vjust= -1.5, hjust = -0.1)
+
+```
+
+```{r, echo=FALSE, fig.width=15, fig.height=20}
+
+plot(cell_type_plot)
+
+```
+
+
+```{r}
+
+# Level 1: what if we didn't get rid of missing values? Could the difference be that more non-disease values are missing and biased towards 0? Conclusion: This maybe the case. 
+
+level_1_plot <- all_genes_comparison %>% 
+  tidyr::gather(type, cell_type, 238:250) %>%
+  ggplot(aes(x= Panel, y = cell_type, fill = Panel))+
+  geom_boxplot() + theme_classic() +
+  facet_wrap(~type, scales = "free", ncol = 4) +
+  scale_fill_manual(values = c("midnightblue", "cornflowerblue", "azure4")) +
+  labs (x = "Gene Panel", y = "Cell-type-specificity index") +
+  theme(axis.text.x = element_blank(), legend.position="bottom")+
+  stat_compare_means(comparisons = comparisons, hide.ns = FALSE) +
+  stat_summary(fun = median, geom="point",colour="darkred", size=2) +
+  stat_summary(fun.data = fun_median1, geom="text", vjust= -1.5, hjust = -0.1)
+
+level_1_plot_adult <- all_genes_comparison %>% 
+  tidyr::gather(type, cell_type, c(243, 247, 245, 238)) %>%
+  ggplot(aes(x= Panel, y = cell_type, fill = Panel))+
+  geom_boxplot() + theme_classic() +
+  facet_wrap(~type, scales = "free", ncol = 4) +
+  scale_fill_manual(values = c("midnightblue", "cornflowerblue", "azure4")) +
+  labs (x = "Gene Panel", y = "Cell-type-specificity index") +
+  theme(axis.text.x = element_blank(), legend.position="bottom")+
+  stat_compare_means(comparisons = comparisons, hide.ns = FALSE) +
+  stat_summary(fun = median, geom="point",colour="darkred", size=2) +
+  stat_summary(fun.data = fun_median1, geom="text", vjust= -1.5, hjust = -0.1)
+
+level_1_plot_all <- all_genes_comparison %>% 
+  tidyr::gather(type, cell_type, c(241, 248:250)) %>%
+  ggplot(aes(x= Panel, y = cell_type, fill = Panel))+
+  geom_boxplot() + theme_classic() +
+  facet_wrap(~type, scales = "free", ncol = 5) +
+  scale_fill_manual(values = c("midnightblue", "cornflowerblue", "azure4")) +
+  labs (x = "Gene Panel", y = "Cell-type-specificity index") +
+  theme(axis.text.x = element_blank(), legend.position="bottom")+
+  stat_compare_means(comparisons = comparisons, hide.ns = FALSE) +
+  stat_summary(fun = median, geom="point",colour="darkred", size=2) +
+  stat_summary(fun.data = fun_median1, geom="text", vjust= -1.5, hjust = -0.1)
+
+```
+
+```{r, echo=FALSE, fig.width=10, fig.height=15}
+
+plot(level_1_plot)
+
+```
+
+
+```{r}
+
+#Level 1: And what about differences between cell-type-specificity within Panels? First, WITHOUT replacing NA values with 0
+
+priority_cell_type <- c("Cerebellum neurons.x", "Telencephalon projecting excitatory neurons", "Peptidergic neurons",
+                        "Glutamatergic neuroblasts", "Telencephalon inhibitory interneurons", "Cholinergic and monoaminergic neurons",
+                        "Telencephalon projecting inhibitory neurons", "Astrocytes", "Dentate gyrus granule neurons",
+                        "Oligodendrocytes.x", "Non-glutamatergic neuroblasts", "Microglia", "Perivascular macrophages")
+
+fun_median2 <- function(x){
+  return(data.frame(y=median(x),label=round(median(x,na.rm=T), 3),nsmall = 2))
+}
+
+comparison_level1celltype <- list(c("Cerebellum neurons.x", "Telencephalon projecting excitatory neurons"), 
+                                  c("Cerebellum neurons.x", "Peptidergic neurons"), 
+                                  c("Cerebellum neurons.x", "Glutamatergic neuroblasts"), 
+                                  c("Cerebellum neurons.x", "Telencephalon inhibitory interneurons"), 
+                                  c("Cerebellum neurons.x", "Cholinergic and monoaminergic neurons"), 
+                                  c("Cerebellum neurons.x", "Telencephalon projecting inhibitory neurons"), 
+                                  c("Cerebellum neurons.x", "Astrocytes"), 
+                                  c("Cerebellum neurons.x", "Dentate gyrus granule neurons"),
+                                  c("Cerebellum neurons.x", "Oligodendrocytes.x"), 
+                                  c("Cerebellum neurons.x", "Non-glutamatergic neuroblasts"), 
+                                  c("Cerebellum neurons.x", "Microglia"), 
+                                  c("Cerebellum neurons.x", "Perivascular macrophages"))
+
+cell_types_within_panels_plot <- all_genes_comparison %>% 
+  tidyr::gather(type, cell_type, 238:250) %>%
+  dplyr::select(type, cell_type, Panel) %>%
+  mutate(type = type %>% factor() %>% fct_relevel(priority_cell_type)) %>%
+  ggplot(aes(x= type, y = cell_type))+
+  geom_boxplot(aes(fill = Panel)) + theme_classic() +
+  facet_wrap(~Panel, scales = "free_y", ncol = 1) +
+  labs (x = "Cell type", y = "Cell-type-specificity index") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position="none") +
+  scale_fill_manual(values = c("midnightblue", "cornflowerblue", "azure4")) +
+  stat_compare_means(comparisons = comparison_level1celltype, hide.ns = FALSE) +
+  stat_summary(fun = median, geom="point",colour="darkred", size=2) +
+  stat_summary(fun.data = fun_median2, geom="text", vjust= -1.5, hjust = -0.1) 
+
+```
+
+```{r, echo=FALSE, fig.width=10, fig.height=15}
+
+plot(cell_types_within_panels_plot)
+
+```
+
+
+```{r}
+
+#Level 1: And what about differences between cell-type-specificity within Panels? Replace NA values with 0
+cell_types_within_panels_no_missing <- all_genes_w_cell_specificity_no_missing %>% 
+  tidyr::gather(type, cell_type, 238:250) %>%
+  dplyr::select(type, cell_type, Panel) %>%
+  mutate(type = type %>% factor() %>% fct_relevel(priority_cell_type)) %>%
+  ggplot(aes(x= type, y = cell_type))+
+  geom_boxplot(aes(fill = Panel)) + theme_classic() +
+  facet_wrap(~Panel, scales = "free_y", ncol = 1) +
+  labs (x = "Cell type", y = "Cell-type-specificity index") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position="none") +
+  scale_fill_manual(values = c("midnightblue", "cornflowerblue", "azure4")) +
+  stat_compare_means(comparisons = comparison_level1celltype, hide.ns = FALSE) +
+  stat_summary(fun = median, geom="point",colour="darkred", size=2) +
+  stat_summary(fun.data = fun_median2, geom="text", vjust= -1.5, hjust = -0.1) 
+
+```
+
+```{r, echo=FALSE, fig.width=10, fig.height=15}
+
+plot(cell_types_within_panels_no_missing)
+
+```
+
+
+```{r}
+
+#Level 2
+level_2_plot <- all_genes_w_cell_specificity_no_missing %>% 
+  tidyr::gather(type, cell_type, 251:257) %>%
+  ggplot(aes(x= Panel, y = cell_type, fill = Panel))+
+  geom_boxplot() + theme_classic() +
+  facet_wrap(~type, scales = "free", ncol = 3) +
+  scale_fill_manual(values = c("midnightblue", "cornflowerblue", "azure4")) +
+  labs (x = "Gene Panel", y = "Cell-type-specificity index") +
+  theme(axis.text.x = element_blank(), legend.position="bottom")+
+  stat_compare_means(comparisons = comparisons, hide.ns = FALSE) +
+  stat_summary(fun = median, geom="point",colour="darkred", size=2) +
+  stat_summary(fun.data = fun_median1, geom="text", vjust= -1.5, hjust = -0.1)
+
+```
+
+```{r, echo=FALSE, fig.width=10, fig.height=15}
+
+plot(level_2_plot)
+
+```
+
+
+```{r}
+
+# Level 2: what if we didn't get rid of missing values? Could the difference be that more non-disease values are missing and biased towards 0? Conclusion: This maybe the case. 
+
+level_2_cell_type_plot <- all_genes_comparison %>% 
+  tidyr::gather(type, cell_type, 251:257) %>%
+  ggplot(aes(x= Panel, y = cell_type, fill = Panel))+
+  geom_boxplot() + theme_classic() +
+  facet_wrap(~type, scales = "free", ncol = 3) +
+  scale_fill_manual(values = c("midnightblue", "cornflowerblue", "azure4")) +
+  labs (x = "Gene Panel", y = "Cell-type-specificity index") +
+  theme(axis.text.x = element_blank(), legend.position="bottom")+
+  stat_compare_means(comparisons = comparisons, hide.ns = FALSE) +
+  stat_summary(fun = median, geom="point",colour="darkred", size=2) +
+  stat_summary(fun.data = fun_median1, geom="text", vjust= -1.5, hjust = -0.1)
+
+```
+
+```{r, echo=FALSE, fig.width=10, fig.height=15}
+
+plot(level_2_cell_type_plot)
+
+```
+
+
+# Differences between cell types per panel for Level 2
+
+```{r}
+
+#Level 2: And what about differences between cell-type-specificity within Panels? First, WITHOUT replacing NA values with 0
+
+priority_cell_type2 <- c("Granule_interneurons", "Molecular_interneurons", "Granule_neurons", 
+                         "Glutamatergic_neuroblasts", "Purkinje_cells", "Inhibitory_neurons", "Neuroblasts")
+
+cell_types_within_panels_level_2_plot <- all_genes_comparison %>% 
+  tidyr::gather(type, cell_type, 251:257) %>%
+  dplyr::select(type, cell_type, Panel) %>%
+  mutate(type = type %>% factor() %>% fct_relevel(priority_cell_type2)) %>%
+  ggplot(aes(x= type, y = cell_type))+
+  geom_boxplot(aes(fill = Panel)) + theme_classic() +
+  facet_wrap(~Panel, scales = "free_y", ncol = 1) +
+  labs (x = "Cell type", y = "Cell-type-specificity index") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position="none") +
+  scale_fill_manual(values = c("midnightblue", "cornflowerblue", "azure4")) +
+  stat_compare_means(hide.ns = FALSE) +
+  stat_summary(fun = median, geom="point",colour="darkred", size=2) +
+  stat_summary(fun.data = fun_median2, geom="text", vjust= -1.5, hjust = -0.1) 
+
+```
+
+```{r, echo=FALSE, fig.width=10, fig.height=15}
+
+plot(cell_types_within_panels_level_2_plot)
+
+```
+
+
+```{r}
+
+#Level 2: And what about differences between cell-type-specificity within Panels? Replace NA values with 0
+cell_types_within_panels_no_missing_level_2_plot <- all_genes_w_cell_specificity_no_missing %>% 
+  tidyr::gather(type, cell_type, 251:257) %>%
+  dplyr::select(type, cell_type, Panel) %>%
+  mutate(type = type %>% factor() %>% fct_relevel(priority_cell_type2)) %>%
+  ggplot(aes(x= type, y = cell_type))+
+  geom_boxplot(aes(fill = Panel)) + theme_classic() +
+  facet_wrap(~Panel, scales = "free_y", ncol = 1) +
+  labs (x = "Cell type", y = "Cell-type-specificity index") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position="none") +
+  scale_fill_manual(values = c("midnightblue", "cornflowerblue", "azure4")) +
+  stat_compare_means(hide.ns = FALSE) +
+  stat_summary(fun = median, geom="point",colour="darkred", size=2) +
+  stat_summary(fun.data = fun_median2, geom="text", vjust= -1.5, hjust = -0.1) 
+
+```
+
+```{r, echo=FALSE, fig.width=10, fig.height=15}
+
+plot(cell_types_within_panels_no_missing_level_2_plot)
+
+```
+
+```{r}
+sessionInfo()
+```

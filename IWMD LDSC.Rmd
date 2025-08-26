@@ -1,0 +1,197 @@
+---
+title: "IWMD LDSC"
+author: "Kylie Montgomery"
+date: 01/09/2024
+output:
+  html_document:
+    code_folding: show
+    df_print: paged
+    highlight: kate
+    theme: paper
+    toc: yes
+    toc_depth: 2
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+#Load libraries
+library(devtools)
+devtools::load_all(path = "/home/MinaRyten/Kylie/MarkerGenes/")
+library(readr)
+library(tidyverse)
+library(LDSCforRyten)
+library(corrplot)
+library(DT)
+library(here)
+library(ggplot2)
+library(readxl)
+library(UpSetR)
+library(stringr)
+library(doParallel)
+
+install_github("RHReynolds/LDSCforRyten", force = T)
+
+knitr::opts_chunk$set(echo = T, warning = F, message= F)
+```
+
+# R Markdown
+
+## PanelApp and HPO-associated gene sets
+1. Adult onset leukodystrophy
+2. Childhood onset leukodystrophy
+3. HPO derived IWMD gene list
+
+These were assessed in IWMD gene panels.Rmd
+
+## GWAS datasets
+Disease	              Author                                                    Year	    n case
+Multiple sclerosis    International Multiple Sclerosis Genetics Consortium      2019	    n = 47,429
+Small vessel stroke	  Mishra                                                    2022	    n = 1,241,619
+Viral infection	      Ben Elsworth                                              2018	    n = 1038
+
+# LDSC 
+Summary statistics from linear mixed models cannot be used to estimate SNP-heritability, but they can be used for estimating genetic correlation and partitioned heritability. This is because they have an "effective sample size" which differs from the true sample size; this affects SNP-heritability estimates but cancels out in the estimation of genetic correlation or proportion of heritability.
+
+```{r}
+#Load data and split into child and adult enriched gene lists
+combined_gene_set_panelapp_modified_final_Sept23 <- read_csv("/home/MinaRyten/Kylie/Functional_genomic_annotation_IWMD/raw_data/combined_gene_set_panelapp_modified_final_Sept23.csv")
+
+IWMD_genes <- combined_gene_set_panelapp_modified_final_Sept23 %>% 
+  filter(Panel == 'HPO derived IWMD genes'|Panel == 'Adult onset leukodystrophy') %>% 
+  mutate(Panel = str_replace(Panel, "Adult onset leukodystrophy", "adult")) %>% 
+  mutate(Panel = str_replace(Panel, "HPO derived IWMD genes", "child"))
+
+#Obtain annotation for each gene set
+
+IWMD_annotation <- IWMD_genes %>% 
+  LDSCforRyten::AddGenePosDetails_RemoveXandYandMT(.,
+                                                   columnToFilter = "ensembl_gene_id", 
+                                                   mart = 37, 
+                                                   attributes = c("ensembl_gene_id","chromosome_name", 
+                                                                  "start_position","end_position"),
+                                                   filter = c("ensembl_gene_id")) %>% 
+  LDSCforRyten::AddBPWindow(windowsize = 250000) 
+
+#Check for missing genes
+missing_genes_hgnc <- subset(IWMD_genes, !(symbol %in% IWMD_annotation$symbol))
+missing_genes_ensembl <- subset(IWMD_genes, !(symbol %in% IWMD_annotation$symbol))
+
+```
+
+```{r}
+
+# Split dataframe by panel into individual dataframes and store within a named list
+# NOTE: Names assigned to each individual dataframe will be used to output files to a directory, and as the file name. It is VERY important that these names contain no '_', as this will affect downstream use of Assimilate_H2_results() function, which will remove anything prior to the last _ in the annotation name.  
+gene_list <- setNames(IWMD_annotation %>% 
+                        group_split(Panel),
+                      IWMD_annotation %>% 
+                        .[["Panel"]] %>% 
+                        unique() %>% 
+                        sort())
+
+# Loading baseline and creating Granges object from baseline model
+BM <- LDSCforRyten::creating_baseline_df(baseline_model = "/home/kmont/Projects/LDSC/baseline_v1.2/baselineLD.97/")
+BM_GR <- LDSCforRyten::df2GRanges(BM, 
+                                  seqname_col = "CHR", 
+                                  start_col = "BP",
+                                  end_col = "BP")
+
+# Find overlapping regions between genes in each annotation and BM (baseline model)
+hits <- gene_list %>%
+  LDSCforRyten::overlap_annot_list(BM_GR, 
+                                   seqname_col = "chromosome_name", 
+                                   start_col = "Gene.Start.MinusKB", 
+                                   end_col = "Gene.end.PlusKB")
+
+# Annotate BM with 1s where annotation overlaps with the baseline model
+list.BM <- hits %>%
+  overlap_annot_hits_w_baseline(BM)
+
+# Exporting files
+annot_basedir <- "/home/kmont/Projects/LDSC/"
+LDSCforRyten::create_annot_file_and_export(list.BM, annot_basedir = annot_basedir)
+
+```
+
+
+```{r}
+## Running LDSC
+#Ran with the following GWASs:
+
+GWASs <- as.character("MS2019,stroke2022,viral2018,AD2019") %>% 
+  str_split(",") %>% 
+  unlist()
+
+read_excel(path = here::here("misc", "LDSC_GWAS_details.xlsx")) %>% 
+  dplyr::filter(Original_name %in% GWASs) %>% 
+  dplyr::select(-contains("Full_paths"), -Original_name, -Notes) %>% 
+  DT::datatable(rownames = FALSE,
+                options = list(scrollX = TRUE),
+                class = 'white-space: nowrap')
+
+```
+
+
+```{bash}
+
+Rscript /home/kmont/Projects/LDSC/LDSC_Pipeline_Entire.R ~/Projects/LDSC/ annotations child --GWAS=MS2019,stroke2022,viral2018,AD2021 --baseline_model=97 
+
+Rscript /home/kmont/Projects/LDSC/LDSC_Pipeline_Entire.R ~/Projects/LDSC/ annotations adult --GWAS=MS2019,stroke2022,viral2018,AD2021 --baseline_model=97 
+
+```
+
+```{r}
+
+results100kbMS2019Stroke2022Viral2018 <- LDSCforRyten::Assimilate_H2_results(path_to_results = list.files(path = "/home/kmont/Projects/LDSC/annotations/Output", pattern = ".results", full.names = T)) %>% 
+  Calculate_enrichment_SE_and_logP(results)
+
+results100kb_with_AD2019 <- LDSCforRyten::Assimilate_H2_results(path_to_results = list.files(path = "/home/kmont/Projects/LDSC/annotations/Output", pattern = ".results", full.names = T)) %>% 
+  Calculate_enrichment_SE_and_logP(results)
+
+ # Saved once
+x = results100kbMS2019Stroke2022Viral2018 %>% 
+  dplyr::select(-Enrichment.Lower.SE, -Enrichment.Upper.SE, -Log_P, -Coefficient.Lower.SE, -Coefficient.Upper.SE)
+
+write.csv(x, "~/Projects/LDSC/annotations/100kb/Output/100kb_LDSCsummary.csv", row.names = FALSE)
+
+```
+
+
+```{r}
+
+# Plotting the results 
+# Multiple test corrections were applied as follows:
+# p < 0.05/(1 x 10) (as represented by black dashed line)
+# 1 reflects the number of GWAS i.e. 1 (keeping the multiple correction relatively lax at this point and not correcting for GWAS, although this would typically be done)
+# 10 reflects the number of panels tested 
+# Presented in the figures is:
+# Coefficient p-value: tests whether an annotation category positively contributes to trait heritability, conditional upon the LDSC baseline model (which in this case is the 97 annotation model that accounts for genetic architecture, LD structures and sequence conservation) 
+# Only plotted a few examples.
+
+LDSC_IWMD_100kb_MS2019Stroke2022Viral2018_plot <- results100kb_with_AD2019 %>% 
+  mutate(anot_name = str_replace(annot_name, "child", "Childhood-enriched IWMD")) %>% 
+  mutate(anot_name = str_replace(annot_name, "Adult enriched IWMD genes", "Adult-enriched IWMD")) %>% 
+  mutate(anot_name = factor(annot_name, levels = c('Childhood-enriched IWMD', 'Adult-enriched IWMD'))) %>%
+  ggplot(., aes(x = MarkerGenes::reorder_within(x = annot_name,
+                                           by = Z_score_logP,
+                                           within = GWAS,
+                                           fun = max,
+                                           desc = TRUE),
+           y = Z_score_logP)) + 
+  geom_point(aes(GWAS, color = factor(annot_name)), shape = 19, size = 1.5) + 
+  scale_color_manual(values = c("midnightblue", "cornflowerblue"), name = "") +
+  geom_hline(aes(yintercept = -log10(0.05/(1*1))), linetype = "77", linewidth = 0.6) + 
+  MarkerGenes::scale_x_reordered() +
+  labs(x = "", y = expression("Coefficient P-value (-log"[1][0]~"p)"), title = "") +
+  theme_bw() + 
+  theme(axis.title = element_text(size = 10, face = "bold"),
+        axis.text.x = element_text(size = 10, angle = 45, hjust = 1, vjust = 1),
+        strip.text = element_text(size = 6),
+        legend.position = "bottom",
+        legend.key.size = unit(1,"line")) 
+
+```
+
+```{r}
+sessionInfo()
+```

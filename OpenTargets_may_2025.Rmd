@@ -1,0 +1,457 @@
+---
+title: "OpenTargets - Assessing overlaps between rare and complex disease"
+author: "Kylie Montgomery"
+date: "2025-05-21"
+output:
+  html_document:
+    code_folding: show
+    df_print: paged
+    highlight: kate
+    theme: paper
+    toc: true
+    toc_depth: 2
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+library(readr)
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message= FALSE)
+```
+
+# R Markdown
+
+## Childhood and adult enriched gene sets compared with OpenTargets genetic associations 
+1. Multiple sclerosis (MS)
+2. Stroke
+3. Primary viral infectious diseases
+4. Alzheimers disease (AD) (currently # out)
+
+
+```{r}
+
+all_IWMD_genes <- read_csv("/home/MinaRyten/Kylie/Functional_genomic_annotation_IWMD/raw_data/IWMD_genes_and_predictors_final_Sept23.csv") %>% 
+  select(symbol, Panel) %>% 
+  filter(Panel != 'Not IWMD') %>% 
+  distinct()
+
+adult_IWMD <- filter(all_IWMD_genes, Panel == 'Adult onset leukodystrophy')
+child_IWMD <- filter(all_IWMD_genes, Panel == 'HPO derived IWMD genes')
+
+all_protein_coding_genes <- read_csv("/home/MinaRyten/Kylie/Functional_genomic_annotation_IWMD/raw_data/all_genes_comparison_gathered.csv") %>% 
+  select(1, 165, 347) %>% 
+  distinct()
+
+multiple_sclerosis <- read_delim("/home/MinaRyten/Kylie/Functional_genomic_annotation_IWMD/raw_data/OpenTargets/multiple_sclerosis_may_2025_opentargets.tsv", delim = "\t") %>% 
+  select(1, 3:11) %>%
+  mutate(Disease = "Multiple sclerosis") %>%
+  distinct(symbol, .keep_all = TRUE)
+
+primary_viral_infectious_diseases <- read_delim("/home/MinaRyten/Kylie/Functional_genomic_annotation_IWMD/raw_data/OpenTargets/primary_viral_infectious_disease_may_2025_opentargets.tsv", delim = "\t") %>% 
+  select(1, 3:11) %>%
+  mutate(Disease = "Primary viral infectious disease") %>%
+  distinct(symbol, .keep_all = TRUE)
+
+stroke <- read_delim("/home/MinaRyten/Kylie/Functional_genomic_annotation_IWMD/raw_data/OpenTargets/stroke_may_2025_opentargets.tsv", delim = "\t") %>% 
+  select(1, 3:11) %>%
+  mutate(Disease = "Stroke") %>%
+  distinct(symbol, .keep_all = TRUE)
+
+
+#AD <- read_delim("/home/MinaRyten/Kylie/Functional_genomic_annotation_IWMD/raw_data/OpenTargets/AD_may_2025_opentargets.tsv", 
+#                                 delim = "\t", escape_double = FALSE, 
+#                                 trim_ws = TRUE) %>% 
+#                                 select(1, 3:11) %>%
+#                                 mutate(Disease = "Alzheimer disease")
+
+
+process_df <- function(df) {
+  df <- filter(df, symbol %in% all_protein_coding_genes$gene)
+
+  df[2:10] <- lapply(df[2:10], function(col) {
+    col[col == "No data"] <- 0
+    as.numeric(col)
+  })
+
+  df <- mutate(df, max_row_value = apply(select(df, 2:10), 1, max, na.rm = TRUE))
+  return(df)
+}
+
+processed_stroke <- process_df(stroke)
+processed_MS <- process_df(multiple_sclerosis)
+processed_viral <- process_df(primary_viral_infectious_diseases)
+
+#processed_AD     <- process_df(AD)
+
+
+```
+
+```{r}
+#Create subsets based on various thresholds of 0.05, 0.1, 0.2, 0.3 0.4 and 0.5
+
+# Define your thresholds
+thresholds <- c(0.05, 0.1, 0.2, 0.3, 0.4, 0.5)
+
+# Function to create and assign subsets
+create_thresholded_subsets <- function(data, base_name) {
+  for (t in thresholds) {
+    subset_df <- data %>% filter(max_row_value >= t)
+    name <- paste0(base_name, "_", t)
+    assign(name, subset_df, envir = .GlobalEnv)
+  }
+}
+
+create_thresholded_subsets(processed_stroke, "processed_stroke")
+create_thresholded_subsets(processed_MS, "processed_MS")
+create_thresholded_subsets(processed_viral, "processed_viral")
+#create_thresholded_subsets(processed_AD, "processed_AD")
+
+```
+
+
+#Gene overlaps
+```{r}
+#Look at the gene overlaps for the adult and child IWMD gene sets at each threshold cutoff
+find_gene_overlaps <- function(prefix, thresholds, gene_lists = list(adult = adult_IWMD, child = child_IWMD)) {
+  for (t in thresholds) {
+    df_name <- paste0(prefix, "_", t)
+    df <- get(df_name)
+
+    for (group in names(gene_lists)) {
+      overlap_df <- inner_join(gene_lists[[group]], df, by = c("symbol" = "symbol"))
+      result_name <- paste0(prefix, "_overlap_", group, "_", t)
+      assign(result_name, overlap_df, envir = .GlobalEnv)
+    }
+  }
+}
+
+thresholds <- c(0.05, 0.1, 0.2, 0.3, 0.4, 0.5)
+
+find_gene_overlaps("processed_stroke", thresholds)
+find_gene_overlaps("processed_MS", thresholds)
+find_gene_overlaps("processed_viral", thresholds)
+#find_gene_overlaps("processed_AD", thresholds)
+
+```
+
+```{r}
+
+#Each dataframe of genetic associations should be reduced to protein coding genes.
+#plot distibution of genetic associations in order to visualise potential cutoffs to remove any with too low a genetic association
+#possibly 0.1 or 0.4. 0.7 is likely to be too stringent.
+genes <- bind_rows(
+  processed_stroke,
+  processed_MS,
+  processed_viral
+# , processed_AD
+) %>%
+  rename(geneticProxyScore = max_row_value)  # Rename for plotting
+
+# Plot distribution of proxy scores
+library(ggplot2)
+
+genes %>%
+  ggplot(aes(x = geneticProxyScore)) +
+  geom_histogram(colour = "black", fill = "lightgrey", bins = 150) +
+  geom_density(adjust = 1/5) +
+  xlim(0, 1) + 
+  coord_cartesian(ylim = c(0, 35)) +
+  facet_wrap(vars(Disease), ncol = 1) +
+  theme_bw() +
+  theme(strip.text = element_text(size = 14, face = "bold"),
+        axis.title = element_text(size = 16, face = "bold"),
+        axis.text = element_text(size = 12, face = "bold")) +
+  geom_vline(xintercept = 0.1, colour = "red") +
+  geom_vline(xintercept = 0.4, colour = "red")
+
+
+```
+
+##Hypergeometric analysis, phyper(Overlap-1, group2, Total-group2, group1,lower.tail= FALSE)
+
+```{r}
+stroke_subset <- processed_stroke %>% filter(max_row_value >= 0.05)
+MS_subset     <- processed_MS %>% filter(max_row_value >= 0.05)
+viral_subset  <- processed_viral %>% filter(max_row_value >= 0.05)
+
+#Subset GWAS genetic association scores of 0.1, 0.2, 0.3, 0.4 or higher.
+filter_by_proxy_score <- function(data, threshold = 0.1, cols = 3:11) {
+  # Replace "No data" with 0 and convert to numeric
+  data[cols] <- lapply(data[cols], function(col) {
+    col[col == "No data"] <- 0
+    as.numeric(col)
+  })
+
+  # Filter rows where any column in cols meets or exceeds the threshold
+  data %>%
+    filter(if_any(all_of(names(data)[cols]), ~ .x >= threshold))
+}
+
+# 0.05 threshold
+stroke_subset_0.05 <- filter_by_proxy_score(stroke_subset, 0.05)
+MS_subset_0.05     <- filter_by_proxy_score(MS_subset, 0.05)
+viral_subset_0.05  <- filter_by_proxy_score(viral_subset, 0.05)
+#AD_subset_0.05     <- filter_by_proxy_score(AD_subset, 0.05)
+
+# 0.1 threshold
+stroke_subset_0.1 <- filter_by_proxy_score(stroke_subset, 0.1)
+MS_subset_0.1     <- filter_by_proxy_score(MS_subset, 0.1)
+viral_subset_0.1  <- filter_by_proxy_score(viral_subset, 0.1)
+#AD_subset_0.1     <- filter_by_proxy_score(AD_subset, 0.1)
+
+# 0.2 threshold
+stroke_subset_0.2 <- filter_by_proxy_score(stroke_subset, 0.2)
+MS_subset_0.2     <- filter_by_proxy_score(MS_subset, 0.2)
+viral_subset_0.2  <- filter_by_proxy_score(viral_subset, 0.2)
+#AD_subset_0.2     <- filter_by_proxy_score(AD_subset, 0.2)
+
+# 0.3 threshold
+stroke_subset_0.3 <- filter_by_proxy_score(stroke_subset, 0.3)
+MS_subset_0.3     <- filter_by_proxy_score(MS_subset, 0.3)
+viral_subset_0.3  <- filter_by_proxy_score(viral_subset, 0.3)
+#AD_subset_0.3     <- filter_by_proxy_score(AD_subset, 0.3)
+
+# 0.4 threshold
+stroke_subset_0.4 <- filter_by_proxy_score(stroke_subset, 0.4)
+MS_subset_0.4     <- filter_by_proxy_score(MS_subset, 0.4)
+viral_subset_0.4  <- filter_by_proxy_score(viral_subset, 0.4)
+#AD_subset_0.4     <- filter_by_proxy_score(AD_subset, 0.4)
+
+# 0.5 threshold
+stroke_subset_0.5 <- filter_by_proxy_score(stroke_subset, 0.5)
+MS_subset_0.5     <- filter_by_proxy_score(MS_subset, 0.5)
+viral_subset_0.5  <- filter_by_proxy_score(viral_subset, 0.5)
+#AD_subset_0.5     <- filter_by_proxy_score(AD_subset, 0.5)
+
+
+```
+
+```{r}
+#GWAS genetic association overlap with adult enriched IWMD gene set, total number of genes is 18,348 as the background set (all IWMD and Not IWMD protein coding genes)
+# from GENCODE release 35 (GRCh38.p13, August 2020) (all IWMD and Not IWMD protein coding genes)
+#Reanalysed with latest figures, GENCODE release v48 includes 19,435 protein coding genes.
+#phyper(Overlap-1, group2, Total-group2, group1,lower.tail= FALSE)
+#phyper(Overlap-1, group2, Total-group2, group1,lower.tail= FALSE)
+
+# Predefine values
+total_genes <- 19435
+adult_set_size <- 85
+child_set_size <- 682
+
+# List of disease datasets (replace with your real ones if needed)
+thresholds <- c(0.05, 0.1, 0.2, 0.3, 0.4, 0.5)
+diseases <- c("MS", "stroke", "viral"
+#              , "AD"
+              )
+
+# Gene sets
+adult_genes <- adult_IWMD$symbol
+child_genes <- child_IWMD$symbol
+
+# Function to get dataset by dynamic name
+get_dataset <- function(name) {
+  get(name, envir = .GlobalEnv)
+}
+
+# Store results
+results <- list()
+
+for (disease in diseases) {
+  for (threshold in thresholds) {
+    # Dynamic object name
+    obj_name <- paste0("processed_", disease, "_", threshold)
+    df <- get_dataset(obj_name)
+    
+    # Unique genes in this dataset
+    disease_genes <- unique(df$symbol)
+    overlap_adult <- length(intersect(disease_genes, adult_genes))
+    overlap_child <- length(intersect(disease_genes, child_genes))
+    disease_set_size <- length(disease_genes)
+    
+    # Group2 = size of disease set
+    # Group1 = size of adult or child set
+    # Total = background
+    ph_adult <- phyper(overlap_adult - 1, disease_set_size, total_genes - disease_set_size, adult_set_size, lower.tail = FALSE)
+    ph_child <- phyper(overlap_child - 1, disease_set_size, total_genes - disease_set_size, child_set_size, lower.tail = FALSE)
+    
+    # Append to results list
+    results[[length(results) + 1]] <- data.frame(
+      Disease = disease,
+      Threshold = threshold,
+      Group = "Adult",
+      Overlap = overlap_adult,
+      DiseaseSetSize = disease_set_size,
+      p_value = ph_adult
+    )
+    
+    results[[length(results) + 1]] <- data.frame(
+      Disease = disease,
+      Threshold = threshold,
+      Group = "Child",
+      Overlap = overlap_child,
+      DiseaseSetSize = disease_set_size,
+      p_value = ph_child
+    )
+  }
+}
+
+# Combine into a single data frame
+hyper_df <- do.call(rbind, results)
+
+# Optional: calculate -log10(p)
+hyper_df$neg_log10p <- -log10(hyper_df$p_value)
+
+# View first few rows
+head(hyper_df)
+
+#Save as tsv
+write_tsv(hyper_df, "opentargets_hyper_df.tsv") 
+
+```
+
+
+```{r}
+#Plot log-10 p-values for each GWAS and gene panel with genetic association score cut-offs of 0.05, 0.1, 0.2, 0.3, 0.4 and 0.5
+hyper_df$Threshold <- as.factor(hyper_df$Threshold)
+
+# Filter for adult overlaps
+variable_cutoffs_adult_plot <- hyper_df %>%
+  filter(Group == "Adult") %>%
+  ggplot(aes(x = Threshold, y = p_value, color = Disease)) +
+  geom_point(size = 3) +
+  geom_hline(yintercept = 0.05, linetype = "dashed", color = "red") +
+  facet_wrap(~ Disease, ncol = 4) +
+  scale_color_manual(values = c("midnightblue", "cornflowerblue", "azure4"
+# , "grey"                                
+                                )) +
+  labs(x = "Cutoff Threshold", y = "p-value") +
+  theme_bw() +
+  theme(
+    axis.title = element_text(size = 15, face = "bold"),
+    legend.position = "bottom",
+    strip.text = element_text(size = 20),
+    axis.text.x = element_text(size = 12, face = "bold"),
+    text = element_text(size = 20)
+  )
+
+variable_cutoffs_child_plot <- hyper_df %>%
+  filter(Group == "Child") %>%
+  ggplot(aes(x = Threshold, y = p_value, color = Disease)) +
+  geom_point(size = 3) +
+  geom_hline(yintercept = 0.05, linetype = "dashed", color = "red") +
+  facet_wrap(~ Disease, ncol = 4) +
+  scale_color_manual(values = c("midnightblue", "cornflowerblue", "azure4"
+#                                , "grey"
+                                )) +
+  labs(x = "Cutoff Threshold", y = "p-value") +
+  theme_bw() +
+  theme(
+    axis.title = element_text(size = 15, face = "bold"),
+    legend.position = "bottom",
+    strip.text = element_text(size = 20),
+    axis.text.x = element_text(size = 12, face = "bold"),
+    text = element_text(size = 20)
+  )
+
+
+```
+
+```{r}
+#Plot log-10 p-values for each GWAS and gene panel with genetic association score cut-offs of 0.05, 0.1, 0.2, 0.3, 0.4 and 0.5
+
+ggplot(hyper_df %>% filter(Group == "Adult"), aes(x = Threshold, y = neg_log10p, color = Disease)) +
+  geom_point(size = 3) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "red") +
+  facet_wrap(~ Disease, ncol = 4) +
+  labs(x = "Cutoff Threshold", y = expression(-log[10](p))) +
+  theme_bw() +
+  theme(
+    axis.title = element_text(size = 15, face = "bold"),
+    legend.position = "bottom",
+    strip.text = element_text(size = 20),
+    axis.text.x = element_text(size = 12, face = "bold"),
+    text = element_text(size = 20)
+    )
+
+ggplot(hyper_df %>% filter(Group == "Child"), aes(x = Threshold, y = neg_log10p, color = Disease)) +
+  geom_point(size = 3) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "red") +
+  facet_wrap(~ Disease, ncol = 4) +
+  labs(x = "Cutoff Threshold", y = expression(-log[10](p))) +
+  theme_bw() +
+  theme(
+    axis.title = element_text(size = 15, face = "bold"),
+    legend.position = "bottom",
+    strip.text = element_text(size = 20),
+    axis.text.x = element_text(size = 12, face = "bold"),
+    text = element_text(size = 20)
+  )
+
+```
+
+```{r}
+
+# Filtered Stroke data up to 0.5 threshold
+stroke_df <- hyper_df %>% 
+  mutate(Threshold = as.numeric(as.character(Threshold))) %>% 
+  filter(Disease == "stroke", Threshold <= 0.5)
+
+stroke_variable_threshold_plot <- stroke_df %>%
+  ggplot(aes(x = Threshold, y = neg_log10p)) +
+  geom_point(aes(color = Group), size = 3) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "red") +
+  facet_wrap(~ Group, ncol = 2) +
+  scale_color_manual(values = c("Adult" = "cornflowerblue", "Child" = "midnightblue")) +
+  labs(x = "Cutoff Threshold", y = expression(-log[10](p))) +
+  theme_bw() +
+  theme(
+    axis.title = element_text(size = 15, face = "bold"),
+    legend.position = "bottom",
+    strip.text = element_text(size = 16, face = "bold"),
+    axis.text.x = element_text(size = 12, face = "bold"),
+    text = element_text(size = 20)
+  )
+
+plot(stroke_variable_threshold_plot)
+
+```
+
+
+```{r}
+
+
+# Filter and reshape the dataset to only use threshold 0.3
+# Filter to threshold = 0.3
+hyper_df_0.3 <- hyper_df %>%
+  filter(Threshold == 0.3)
+
+# Create the plot
+opentargets_all_log10_may_2025 <- ggplot(hyper_df_0.3, aes(x = neg_log10p, y = Disease)) +
+  geom_point(aes(colour = Group), shape = 19, size = 3) +
+  scale_color_manual(values = c("cornflowerblue", "midnightblue")) +
+  geom_vline(xintercept = -log10(0.05), linetype = "77", linewidth = 0.6) +
+  coord_flip() +
+  facet_wrap(~ Disease, ncol = 3) +
+  labs(x = expression("-log"[10]~"p"), y = "") +
+  theme_bw() +
+  theme(
+    axis.title = element_text(size = 15, face = "bold"),
+    legend.position = "bottom",
+    strip.text = element_text(size = 20),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    text = element_text(size = 20)
+  )
+
+  
+plot(opentargets_all_log10_may_2025)
+  
+```
+
+
+```{r}
+sessionInfo()
+```
